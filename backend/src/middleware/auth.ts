@@ -1,26 +1,34 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { User } from '../models/User';
 import config from '../config/environment';
+import { pgPool } from '../db';
+import { UserRole } from '../models/User';
 
 interface JwtPayload {
   id: string;
 }
 
+export interface AuthenticatedUser {
+  id: string;
+  name: string;
+  email: string;
+  role: UserRole;
+}
+
 declare global {
   namespace Express {
+    // eslint-disable-next-line @typescript-eslint/no-empty-interface
     interface Request {
-      user?: any;
+      user?: AuthenticatedUser;
     }
   }
 }
 
 export const protect = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    // 1) Check if token exists
-    let token;
+    let token: string | undefined;
     if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-      token = req.headers.authorization.split(' ')[1];
+      [, token] = req.headers.authorization.split(' ');
     }
 
     if (!token) {
@@ -30,11 +38,15 @@ export const protect = async (req: Request, res: Response, next: NextFunction) =
       });
     }
 
-    // 2) Verify token
     const decoded = jwt.verify(token, config.jwtSecret) as JwtPayload;
 
-    // 3) Check if user still exists
-    const currentUser = await User.findById(decoded.id);
+    const result = await pgPool.query<AuthenticatedUser>(
+      'select id, name, email, role from public.users where id = $1 limit 1',
+      [decoded.id],
+    );
+
+    const currentUser = result.rows[0];
+
     if (!currentUser) {
       return res.status(401).json({
         status: 'error',
@@ -42,7 +54,6 @@ export const protect = async (req: Request, res: Response, next: NextFunction) =
       });
     }
 
-    // Grant access to protected route
     req.user = currentUser;
     return next();
   } catch (error) {
@@ -54,8 +65,7 @@ export const protect = async (req: Request, res: Response, next: NextFunction) =
   }
 };
 
-// Restrict to certain roles
-export const restrictTo = (...roles: string[]) => {
+export const restrictTo = (...roles: UserRole[]) => {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) {
       return res.status(401).json({
@@ -70,6 +80,7 @@ export const restrictTo = (...roles: string[]) => {
         message: 'You do not have permission to perform this action',
       });
     }
+
     return next();
   };
-}; 
+};

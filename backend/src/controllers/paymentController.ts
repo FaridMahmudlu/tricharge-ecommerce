@@ -1,172 +1,127 @@
 import { Request, Response } from 'express';
 import Stripe from 'stripe';
-import { Order, IOrder } from '../models/Order';
-import { Document, Types } from 'mongoose';
+import { pgPool } from '../db';
 
-interface OrderDocument extends IOrder, Document {
-  _id: Types.ObjectId;
-}
-
-interface PaymentError extends Error {
-  type?: string;
-  code?: string;
-}
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
   apiVersion: '2022-11-15',
 });
 
-// Create payment intent
 export const createPaymentIntent = async (req: Request, res: Response) => {
   try {
-    const { orderId } = req.body;
+    if (!req.user) {
+      return res.status(401).json({ status: 'error', message: 'User not authenticated' });
+    }
+
+    const { orderId } = req.body as { orderId?: string };
 
     if (!orderId) {
-      return res.status(400).json({ 
-        status: 'error',
-        message: 'Order ID is required' 
-      });
+      return res.status(400).json({ status: 'error', message: 'Order ID is required' });
     }
 
-    const order = await Order.findById(orderId) as OrderDocument;
+    const orderResult = await pgPool.query(
+      'select id, user_id, total_price, is_paid from public.orders where id = $1 limit 1',
+      [orderId],
+    );
+
+    const order = orderResult.rows[0];
+
     if (!order) {
-      return res.status(404).json({ 
-        status: 'error',
-        message: 'Order not found' 
-      });
+      return res.status(404).json({ status: 'error', message: 'Order not found' });
     }
 
-    // Check if order is already paid
-    if (order.isPaid) {
-      return res.status(400).json({ 
-        status: 'error',
-        message: 'Order has already been paid' 
-      });
+    if (order.user_id !== req.user.id) {
+      return res.status(403).json({ status: 'error', message: 'Not authorized to pay for this order' });
     }
 
-    // Check if user is authorized to pay for this order
-    if (order.user.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ 
-        status: 'error',
-        message: 'Not authorized to pay for this order' 
-      });
+    if (order.is_paid) {
+      return res.status(400).json({ status: 'error', message: 'Order has already been paid' });
     }
 
-    // Create payment intent
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: Math.round(order.totalPrice * 100), // Convert to cents
+      amount: Math.round(Number(order.total_price) * 100),
       currency: 'usd',
       metadata: {
-        orderId: order._id.toString(),
-        userId: req.user._id.toString(),
+        orderId: order.id,
+        userId: req.user.id,
       },
       automatic_payment_methods: {
         enabled: true,
       },
     });
 
-    return res.json({
-      status: 'success',
-      clientSecret: paymentIntent.client_secret,
-    });
+    return res.json({ status: 'success', clientSecret: paymentIntent.client_secret });
   } catch (error) {
-    const stripeError = error as PaymentError;
+    const stripeError = error as { type?: string; message?: string };
     if (stripeError.type?.startsWith('Stripe')) {
-      return res.status(400).json({ 
-        status: 'error',
-        message: stripeError.message 
-      });
+      return res.status(400).json({ status: 'error', message: stripeError.message || 'Stripe error' });
     }
-    return res.status(500).json({ 
-      status: 'error',
-      message: 'Error creating payment intent' 
-    });
+    console.error('Error creating payment intent:', error);
+    return res.status(500).json({ status: 'error', message: 'Error creating payment intent' });
   }
 };
 
-// Handle Stripe webhook
 export const handleStripeWebhook = async (req: Request, res: Response) => {
-  const sig = req.headers['stripe-signature'];
+  const signature = req.headers['stripe-signature'] as string | undefined;
 
-  if (!sig || !process.env.STRIPE_WEBHOOK_SECRET) {
-    return res.status(400).json({ 
-      status: 'error',
-      message: 'Missing stripe signature or webhook secret' 
-    });
+  if (!signature || !process.env.STRIPE_WEBHOOK_SECRET) {
+    return res.status(400).json({ status: 'error', message: 'Missing stripe signature or webhook secret' });
   }
 
   let event: Stripe.Event;
 
   try {
-    event = stripe.webhooks.constructEvent(
-      req.body,
-      sig,
-      process.env.STRIPE_WEBHOOK_SECRET
-    );
+    event = stripe.webhooks.constructEvent(req.body, signature, process.env.STRIPE_WEBHOOK_SECRET);
   } catch (err) {
     const error = err as Error;
-    return res.status(400).json({ 
-      status: 'error',
-      message: `Webhook Error: ${error.message}` 
-    });
+    return res.status(400).json({ status: 'error', message: `Webhook Error: ${error.message}` });
   }
 
   try {
-    // Handle the event
-    switch (event.type) {
-      case 'payment_intent.succeeded':
-        const paymentIntent = event.data.object as Stripe.PaymentIntent;
-        const orderId = paymentIntent.metadata.orderId;
+    if (event.type === 'payment_intent.succeeded') {
+      const paymentIntent = event.data.object as Stripe.PaymentIntent;
+      const orderId = paymentIntent.metadata.orderId;
 
-        if (!orderId) {
-          throw new Error('Order ID not found in payment intent metadata');
-        }
+      if (!orderId) {
+        throw new Error('Order ID not found in payment intent metadata');
+      }
 
-        // Update order status
-        const order = await Order.findById(orderId);
-        if (order) {
-          order.isPaid = true;
-          order.paidAt = new Date();
-          order.status = 'processing';
-          order.paymentResult = {
+      await pgPool.query(
+        `update public.orders
+            set is_paid = true,
+                paid_at = timezone('utc', now()),
+                status = 'processing',
+                payment_result = $1,
+                updated_at = timezone('utc', now())
+          where id = $2`,
+        [
+          {
             id: paymentIntent.id,
             status: paymentIntent.status,
             update_time: new Date().toISOString(),
             email_address: paymentIntent.receipt_email || '',
-          };
-          await order.save();
-        }
-        break;
+          },
+          orderId,
+        ],
+      );
+    } else if (event.type === 'payment_intent.payment_failed') {
+      const paymentIntent = event.data.object as Stripe.PaymentIntent;
+      const orderId = paymentIntent.metadata.orderId;
 
-      case 'payment_intent.payment_failed':
-        const failedPayment = event.data.object as Stripe.PaymentIntent;
-        const failedOrderId = failedPayment.metadata.orderId;
+      if (!orderId) {
+        throw new Error('Order ID not found in failed payment intent metadata');
+      }
 
-        if (!failedOrderId) {
-          throw new Error('Order ID not found in failed payment intent metadata');
-        }
-
-        // Update order status to cancelled
-        const failedOrder = await Order.findById(failedOrderId);
-        if (failedOrder) {
-          failedOrder.status = 'cancelled';
-          await failedOrder.save();
-        }
-        break;
-
-      default:
-        console.log(`Unhandled event type ${event.type}`);
+      await pgPool.query(
+        "update public.orders set status = 'cancelled', updated_at = timezone('utc', now()) where id = $1",
+        [orderId],
+      );
+    } else {
+      console.log(`Unhandled event type ${event.type}`);
     }
 
-    return res.json({ 
-      status: 'success',
-      received: true 
-    });
+    return res.json({ status: 'success', received: true });
   } catch (error) {
     console.error('Webhook processing error:', error);
-    return res.status(500).json({ 
-      status: 'error',
-      message: 'Error processing webhook' 
-    });
+    return res.status(500).json({ status: 'error', message: 'Error processing webhook' });
   }
-}; 
+};

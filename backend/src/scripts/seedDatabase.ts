@@ -1,183 +1,159 @@
-import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import config from '../config/environment';
-import { User } from '../models/User';
-import { Product } from '../models/Product';
+import { pgPool } from '../db';
+
+const ADMIN_EMAIL = 'admin@example.com';
+const ADMIN_PASSWORD = 'change-this-password';
 
 const sampleProducts = [
   {
-    name: "Y010 3-IN-1 Wireless Charger Foldable 15W Fast Charging Station",
-    description: "Premium 3-in-1 wireless charging dock for your phone, smartwatch, and earphones. Features 15W/10W/7.5W/5W charging capabilities, made with high-quality ABS and Aluminum materials. Includes night light ambient light and foldable design for easy storage.",
-    price: 8.00,
-    category: "Electronics",
+    name: 'TriCharge Wireless Dock',
+    description: '3-in-1 wireless charging dock for phone, earbuds, and watch with foldable design and ambient lighting.',
+    price: 89.99,
+    category: 'Accessories',
+    stock: 25,
+    images: [
+      'https://images.unsplash.com/photo-1582719478250-c89cae4dc85b?w=800',
+      'https://images.unsplash.com/photo-1580894897480-00a6ee5b3c4a?w=800',
+    ],
+    features: [
+      'Supports up to 15W fast charging',
+      'USB-C input',
+      'Night light with three brightness levels',
+    ],
+    colors: [
+      { name: 'Matte Black', image: 'https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=800' },
+      { name: 'Soft White', image: 'https://images.unsplash.com/photo-1582719478250-c89cae4dc85b?w=800' },
+    ],
+  },
+  {
+    name: 'TrueSound Earbuds Pro',
+    description: 'Noise-cancelling wireless earbuds with 36-hour battery life and wireless charging case.',
+    price: 129.0,
+    category: 'Audio',
     stock: 50,
     images: [
-      "https://s.alicdn.com/@sc04/kf/Ha5a083aaaea8453bb941aaf1c5ee8d6fY.jpg_720x720q50.jpg",
-      "https://s.alicdn.com/@sc04/kf/H39bf4944d26c4a1fbecb796104f6f6a0T.jpg_720x720q50.jpg",
-      "https://s.alicdn.com/@sc04/kf/Hedb053c5b1d842b79c8887382ad7a2d0j.jpg_720x720q50.jpg"
+      'https://images.unsplash.com/photo-1546435770-a3e426bf472b?w=800',
+      'https://images.unsplash.com/photo-1523475472560-d2df97ec485c?w=800',
     ],
     features: [
-      "Multi-device charging (Phone + Earphones + Watch)",
-      "15W/10W/7.5W/5W/3W power output",
-      "Night Light Ambient Light",
-      "Foldable design",
-      "Type-C port",
-      "CE FCC ROHS certified",
-      "Compact design: 46X31X42 cm"
+      'Hybrid active noise cancellation',
+      'IPX5 water resistance',
+      'Low latency gaming mode',
     ],
-    specifications: {
-      material: "ABS, Aluminum",
-      input: "12-24V/5A",
-      output: "9V/2A, 5V/3A, 12V/1.5A",
-      chargingDistance: "<6mm",
-      warranty: "1 year",
-      protection: ["Short Circuit", "Overcurrent", "Overvoltage"]
-    },
-    colors: [
-      {
-        name: "White",
-        image: "https://s.alicdn.com/@sc04/kf/H39bf4944d26c4a1fbecb796104f6f6a0T.jpg_720x720q50.jpg"
-      },
-      {
-        name: "Black",
-        image: "https://s.alicdn.com/@sc04/kf/Hedb053c5b1d842b79c8887382ad7a2d0j.jpg_720x720q50.jpg"
-      }
-    ],
-    averageRating: 4.5,
-    numReviews: 12
   },
-  {
-    name: "Premium Wireless Earbuds Pro",
-    description: "High-quality wireless earbuds with active noise cancellation, 30-hour battery life, and premium sound quality. Perfect for music lovers and professionals.",
-    price: 29.99,
-    category: "Electronics",
-    stock: 100,
-    images: [
-      "https://images.unsplash.com/photo-1590658268037-6bf12165a8df?w=500",
-      "https://images.unsplash.com/photo-1572569511254-d8f925fe2cbb?w=500"
-    ],
-    features: [
-      "Active Noise Cancellation",
-      "30-hour battery life",
-      "Premium sound quality",
-      "Water resistant",
-      "Touch controls",
-      "Wireless charging case"
-    ],
-    specifications: {
-      batteryLife: "30 hours",
-      connectivity: "Bluetooth 5.0",
-      waterResistance: "IPX4",
-      chargingTime: "2 hours"
-    },
-    averageRating: 4.8,
-    numReviews: 45
-  },
-  {
-    name: "Smart Fitness Watch",
-    description: "Advanced fitness tracking watch with heart rate monitoring, GPS, and 7-day battery life. Perfect for athletes and health enthusiasts.",
-    price: 49.99,
-    category: "Electronics",
-    stock: 75,
-    images: [
-      "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=500",
-      "https://images.unsplash.com/photo-1544117519-31a4b719223d?w=500"
-    ],
-    features: [
-      "Heart rate monitoring",
-      "GPS tracking",
-      "7-day battery life",
-      "Water resistant",
-      "Sleep tracking",
-      "Activity tracking"
-    ],
-    specifications: {
-      batteryLife: "7 days",
-      waterResistance: "5ATM",
-      display: "1.4 inch AMOLED",
-      connectivity: "Bluetooth 5.0"
-    },
-    averageRating: 4.6,
-    numReviews: 28
-  }
 ];
 
 const createAdminUser = async () => {
-  try {
-    // Check if admin user already exists
-    const existingAdmin = await User.findOne({ email: 'fariddmahmudlu2008@gmail.com' });
-    if (existingAdmin) {
-      console.log('✅ Admin user already exists');
-      return existingAdmin;
-    }
+  const hashedPassword = await bcrypt.hash(ADMIN_PASSWORD, config.bcryptRounds);
 
-    // Create admin user
-    const hashedPassword = await bcrypt.hash('farid20082011', config.bcryptRounds);
-    const adminUser = await User.create({
-      name: 'Admin User',
-      email: 'fariddmahmudlu2008@gmail.com',
-      password: hashedPassword,
-      role: 'admin'
-    });
+  await pgPool.query(
+    'delete from public.users where role = $1 and email <> $2',
+    ['admin', ADMIN_EMAIL],
+  );
 
-    console.log('✅ Admin user created successfully');
-    return adminUser;
-  } catch (error) {
-    console.error('❌ Error creating admin user:', error);
-    throw error;
+  const existing = await pgPool.query('select id from public.users where email = $1', [ADMIN_EMAIL]);
+
+  if (existing.rows.length === 0) {
+    await pgPool.query(
+      'insert into public.users (name, email, password_hash, role) values ($1, $2, $3, $4)',
+      ['Admin User', ADMIN_EMAIL, hashedPassword, 'admin'],
+    );
+    console.log('Created admin user');
+  } else {
+    await pgPool.query(
+      "update public.users set password_hash = $1, role = $2, updated_at = timezone('utc', now()) where id = $3",
+      [hashedPassword, 'admin', existing.rows[0].id],
+    );
+    console.log('Updated admin user password');
   }
 };
 
 const createSampleProducts = async () => {
+  const existing = await pgPool.query('select id from public.products limit 1');
+  if (existing.rows.length > 0) {
+    console.log('Products already exist, skipping seeding.');
+    return;
+  }
+
+  const client = await pgPool.connect();
   try {
-    // Check if products already exist
-    const existingProducts = await Product.find();
-    if (existingProducts.length > 0) {
-      console.log(`✅ ${existingProducts.length} products already exist`);
-      return existingProducts;
+    await client.query('BEGIN');
+
+    for (const product of sampleProducts) {
+      const { rows } = await client.query<{ id: string }>(
+        `insert into public.products (name, description, price, category, stock, specifications)
+         values ($1, $2, $3, $4, $5, $6)
+         returning id`,
+        [
+          product.name,
+          product.description,
+          product.price,
+          product.category,
+          product.stock,
+          {},
+        ],
+      );
+
+      const productId = rows[0].id;
+
+      if (product.images) {
+        for (let index = 0; index < product.images.length; index += 1) {
+          await client.query(
+            'insert into public.product_images (product_id, url, position) values ($1, $2, $3)',
+            [productId, product.images[index], index],
+          );
+        }
+      }
+
+      if (product.features) {
+        for (const feature of product.features) {
+          await client.query(
+            'insert into public.product_features (product_id, feature) values ($1, $2)',
+            [productId, feature],
+          );
+        }
+      }
+
+      if (product.colors) {
+        for (const color of product.colors) {
+          await client.query(
+            'insert into public.product_colors (product_id, name, image) values ($1, $2, $3)',
+            [productId, color.name, color.image],
+          );
+        }
+      }
     }
 
-    // Create sample products
-    const products = await Product.create(sampleProducts);
-    console.log(`✅ ${products.length} sample products created successfully`);
-    return products;
+    await client.query('COMMIT');
+    console.log(`Seeded ${sampleProducts.length} products`);
   } catch (error) {
-    console.error('❌ Error creating sample products:', error);
+    await client.query('ROLLBACK');
     throw error;
+  } finally {
+    client.release();
   }
 };
 
 const seedDatabase = async () => {
   try {
-    console.log('🌱 Starting database seeding...');
-    
-    // Connect to database
-    await mongoose.connect(config.mongodbUri);
-    console.log('✅ Connected to MongoDB');
-
-    // Create admin user
+    console.log('Seeding database with Supabase/Postgres...');
     await createAdminUser();
-
-    // Create sample products
     await createSampleProducts();
-
-    console.log('🎉 Database seeding completed successfully!');
-    console.log('\n📋 Login Credentials:');
-    console.log('   Email: fariddmahmudlu2008@gmail.com');
-    console.log('   Password: farid20082011');
-    
+    console.log('Seeding completed.');
+    console.log('\nAdmin credentials:');
+    console.log(`  Email: ${ADMIN_EMAIL}`);
+    console.log(`  Password: ${ADMIN_PASSWORD}`);
   } catch (error) {
-    console.error('❌ Database seeding failed:', error);
+    console.error('Database seeding failed:', error);
     process.exit(1);
   } finally {
-    await mongoose.disconnect();
-    console.log('✅ Disconnected from MongoDB');
+    pgPool.end();
   }
 };
 
-// Run seeding if this file is executed directly
 if (require.main === module) {
   seedDatabase();
 }
 
-export default seedDatabase; 
+export default seedDatabase;

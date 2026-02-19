@@ -1,60 +1,54 @@
 import { Request, Response } from 'express';
 import jwt, { SignOptions } from 'jsonwebtoken';
-import { User } from '../models/User';
-import { Types, Document } from 'mongoose';
+import bcrypt from 'bcryptjs';
 import config from '../config/environment';
+import { pgPool } from '../db';
+import { UserRow, toPublicUser } from '../models/User';
 
-interface UserDocument extends Document {
-  _id: Types.ObjectId;
-  name: string;
-  email: string;
-  password: string;
-  role: string;
-  comparePassword(candidatePassword: string): Promise<boolean>;
-}
-
-// Generate JWT Token
-const generateToken = (id: Types.ObjectId): string => {
+const generateToken = (id: string): string => {
   const options: SignOptions = {
-    expiresIn: config.jwtExpiresIn as unknown as jwt.SignOptions['expiresIn']
+    expiresIn: config.jwtExpiresIn as unknown as jwt.SignOptions['expiresIn'],
   };
   return jwt.sign({ id }, config.jwtSecret, options);
 };
 
-// Register new user
 export const register = async (req: Request, res: Response) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, password } = req.body as Record<string, string>;
 
-    // Check if user already exists
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({ 
+    if (!name || !email || !password) {
+      return res.status(400).json({
         status: 'error',
-        message: 'User already exists' 
+        message: 'Name, email and password are required',
       });
     }
 
-    // Create new user
-    const user = await User.create({
-      name,
-      email,
-      password,
-    }) as UserDocument;
+    const existing = await pgPool.query('select id from public.users where email = $1 limit 1', [email]);
 
-    // Generate token
-    const token = generateToken(user._id);
+    if (existing.rows.length > 0) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'User already exists',
+      });
+    }
+
+    const hash = await bcrypt.hash(password, config.bcryptRounds);
+
+    const insert = await pgPool.query<UserRow>(
+      `insert into public.users (name, email, password_hash)
+       values ($1, $2, $3)
+       returning id, name, email, role, created_at, updated_at, password_hash`,
+      [name, email, hash],
+    );
+
+    const userRow = insert.rows[0];
+    const token = generateToken(userRow.id);
 
     return res.status(201).json({
       status: 'success',
       data: {
         token,
-        user: {
-          id: user._id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-        },
+        user: toPublicUser(userRow),
       },
     });
   } catch (error) {
@@ -66,12 +60,10 @@ export const register = async (req: Request, res: Response) => {
   }
 };
 
-// Login user
 export const login = async (req: Request, res: Response) => {
   try {
-    const { email, password } = req.body;
+    const { email, password } = req.body as Record<string, string>;
 
-    // Check if email and password exist
     if (!email || !password) {
       return res.status(400).json({
         status: 'error',
@@ -79,28 +71,39 @@ export const login = async (req: Request, res: Response) => {
       });
     }
 
-    // Check if user exists && password is correct
-    const user = await User.findOne({ email }).select('+password') as UserDocument;
-    if (!user || !(await user.comparePassword(password))) {
+    const result = await pgPool.query<UserRow & { password_hash: string }>(
+      `select id, name, email, role, password_hash, created_at, updated_at
+       from public.users
+       where email = $1
+       limit 1`,
+      [email],
+    );
+
+    const userRow = result.rows[0];
+
+    if (!userRow) {
       return res.status(401).json({
         status: 'error',
         message: 'Incorrect email or password',
       });
     }
 
-    // Generate token
-    const token = generateToken(user._id);
+    const passwordMatch = await bcrypt.compare(password, userRow.password_hash);
+
+    if (!passwordMatch) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'Incorrect email or password',
+      });
+    }
+
+    const token = generateToken(userRow.id);
 
     return res.status(200).json({
       status: 'success',
       data: {
         token,
-        user: {
-          id: user._id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-        },
+        user: toPublicUser(userRow),
       },
     });
   } catch (error) {
@@ -110,4 +113,5 @@ export const login = async (req: Request, res: Response) => {
       message: 'Error logging in',
     });
   }
-  };
+};
+

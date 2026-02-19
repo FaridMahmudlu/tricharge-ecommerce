@@ -1,65 +1,29 @@
-import mongoose, { Document, Schema } from 'mongoose';
-import bcrypt from 'bcryptjs';
+export type UserRole = 'user' | 'admin';
 
-export interface IUser extends Document {
+export interface UserRow {
+  id: string;
   name: string;
   email: string;
-  password: string;
-  role: 'user' | 'admin';
-  comparePassword(candidatePassword: string): Promise<boolean>;
+  password_hash: string;
+  role: UserRole;
+  created_at: string;
+  updated_at: string;
 }
 
-const userSchema = new Schema<IUser>(
-  {
-    name: {
-      type: String,
-      required: [true, 'Please provide your name'],
-      trim: true,
-    },
-    email: {
-      type: String,
-      required: [true, 'Please provide your email'],
-      unique: true,
-      lowercase: true,
-      trim: true,
-    },
-    password: {
-      type: String,
-      required: [true, 'Please provide a password'],
-      minlength: 8,
-      select: false,
-    },
-    role: {
-      type: String,
-      enum: ['user', 'admin'],
-      default: 'user',
-    },
-  },
-  {
-    timestamps: true,
-  }
-);
+export interface PublicUser {
+  id: string;
+  name: string;
+  email: string;
+  role: UserRole;
+  createdAt: string;
+  updatedAt: string;
+}
 
-// Hash password before saving
-userSchema.pre('save', async function (next) {
-  if (!this.isModified('password')) return next();
-  
-  try {
-    const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
-    next();
-  } catch (error: any) {
-    next(error);
-  }
+export const toPublicUser = (row: UserRow): PublicUser => ({
+  id: row.id,
+  name: row.name,
+  email: row.email,
+  role: row.role,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
 });
-
-// Compare password method
-userSchema.methods.comparePassword = async function (candidatePassword: string): Promise<boolean> {
-  try {
-    return await bcrypt.compare(candidatePassword, this.password);
-  } catch (error) {
-    return false;
-  }
-};
-
-export const User = mongoose.model<IUser>('User', userSchema); 
