@@ -20,7 +20,7 @@ const fadeIn = keyframes`
 `;
 
 const Container = styled.div`
-  padding: 4rem 2rem;
+  padding: 6rem 2rem 4rem;
   max-width: 1200px;
   margin: 0 auto;
   animation: ${fadeIn} 0.6s ease-out;
@@ -385,10 +385,14 @@ const ProductDetail: React.FC = () => {
             colors: response.data.colors ?? [],
           });
         } else {
-          setProduct(null);
+          // Fallback to local data if backend returns no data
+          const localProduct = products.find(p => String(p.id) === String(id));
+          setProduct(localProduct ?? null);
         }
       } catch {
-        setProduct(null);
+        // Fallback to local data if backend is unavailable
+        const localProduct = products.find(p => String(p.id) === String(id));
+        setProduct(localProduct ?? null);
       } finally {
         setLoading(false);
       }
@@ -396,8 +400,48 @@ const ProductDetail: React.FC = () => {
     fetchProduct();
   }, [id]);
 
-  if (loading) return <div>Loading...</div>;
-  if (!product) return <div>Product not found</div>;
+  if (loading) return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      minHeight: '60vh',
+      fontSize: '1.2rem',
+      color: '#2c5282',
+      paddingTop: '5rem'
+    }}>
+      Loading product...
+    </div>
+  );
+
+  if (!product) return (
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      minHeight: '60vh',
+      paddingTop: '5rem',
+      gap: '1rem'
+    }}>
+      <h2 style={{ color: '#2c5282', fontSize: '1.5rem' }}>Product Not Found</h2>
+      <p style={{ color: '#4a5568' }}>The product you are looking for does not exist.</p>
+      <button
+        onClick={() => navigate('/')}
+        style={{
+          background: '#2c5282',
+          color: 'white',
+          border: 'none',
+          borderRadius: '8px',
+          padding: '0.75rem 1.5rem',
+          cursor: 'pointer',
+          fontSize: '1rem'
+        }}
+      >
+        Back to Home
+      </button>
+    </div>
+  );
 
   const productImages = [
     "https://s.alicdn.com/@sc04/kf/H4157de6f908846c8a9c3427eda5483d1P.jpg_720x720q50.jpg",
@@ -462,13 +506,13 @@ const ProductDetail: React.FC = () => {
       alert('Please select a color');
       return;
     }
-    
+
     const productWithQuantity: ProductWithQuantity = {
       ...product,
       quantity,
       selectedColor
     };
-    
+
     await addToCart(productWithQuantity);
     navigate('/cart');
   };
@@ -479,7 +523,7 @@ const ProductDetail: React.FC = () => {
         <span style={{ fontSize: '16px', lineHeight: 1 }}>←</span>
         <BackButtonText>Back to Home</BackButtonText>
       </BackButton>
-      
+
       <ProductLayout>
         <ImageContainer>
           <MainImageContainer
@@ -487,9 +531,9 @@ const ProductDetail: React.FC = () => {
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
           >
-            <ProductImage 
-              src={allImages[currentIndex]} 
-              alt={product.name} 
+            <ProductImage
+              src={allImages[currentIndex]}
+              alt={product.name}
             />
             <NavigationArrow direction="left" onClick={handlePreviousImage} />
             <NavigationArrow direction="right" onClick={handleNextImage} />
@@ -510,7 +554,7 @@ const ProductDetail: React.FC = () => {
           <ProductName>{product.name}</ProductName>
           <ProductPrice>{product.price.toFixed(2)}</ProductPrice>
           <ProductDescription>{product.description}</ProductDescription>
-          
+
           <ColorSection>
             <ColorLabel>Available Colors:</ColorLabel>
             <ColorOptions>
